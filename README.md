@@ -42,8 +42,8 @@ A deep learning-based application that predicts age and gender from facial image
 
 ### Step 1: Clone the Repository
 ```bash
-git clone [https://github.com/yourusername/utkface-age-gender-prediction.git](https://github.com/yourusername/utkface-age-gender-prediction.git)
-cd utkface-age-gender-prediction
+git clone https://github.com/hsnbshr98/Age-and-Gender-Prediction.git
+cd Age-and-Gender-Prediction
 ```
 
 ### Step 2: Create Virtual Environment (Recommended)
@@ -87,7 +87,7 @@ The application will open in your default web browser at `http://localhost:8501`
 Age-and-Gender-Prediction/
 │
 ├── app.py                    # Main Streamlit application
-├── model_training.ipynb      # Jupyter notebook for model training
+├── age-and-gender-prediction.ipynb      # Jupyter notebook for model training
 ├── gender_age_model.h5       # Pre-trained model (download separately)
 │
 ├── requirements.txt          # Python dependencies
@@ -188,13 +188,6 @@ docker build -t age-gender-predictor .
 docker run -p 8501:8501 age-gender-predictor
 ```
 
-### Cloud Deployment Options
-* **Streamlit Cloud:** One-click deployment
-* **Heroku:** Container deployment
-* **AWS EC2:** Virtual machine hosting
-* **Google Cloud Run:** Serverless container
-
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
@@ -208,7 +201,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📞 Contact
 
-Your Name - [@hsnbshr98](https://github.com/hsnbshr98) - hussinbash98@gmail.com
+Name - [@hsnbshr98](https://github.com/hsnbshr98) - hussinbash98@gmail.com
 
 Project Link: [https://github.com/hsnbshr98/Age-and-Gender-Prediction](https://github.com/hsnbshr98/Age-and-Gender-Prediction)
 

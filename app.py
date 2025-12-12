@@ -3,9 +3,10 @@ import numpy as np
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from PIL import Image
-import matplotlib.pyplot as plt
 import tempfile
 import os
+import cv2
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -15,47 +16,72 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # Constants
 IMG_SIZE = 128
 
+# Initialize session state
+if 'webcam_active' not in st.session_state:
+    st.session_state.webcam_active = False
+
 def load_trained_model(model_path='gender_age_model.h5'):
     """Load the trained Keras model"""
     try:
         model = load_model(model_path, compile=False)
-        # Recompile with appropriate metrics if needed
+        # Recompile with appropriate metrics
         model.compile(
             optimizer='adam',
             loss={'age_output': 'mae', 'gender_output': 'binary_crossentropy'},
             metrics={'age_output': 'mae', 'gender_output': 'accuracy'}
         )
-        st.success("✅ Model loaded successfully!")
         return model
     except Exception as e:
         st.error(f"❌ Error loading model: {str(e)}")
-        st.info("Please ensure the model file exists and is in the correct format.")
         return None
 
-def preprocess_image(image_file, img_size=IMG_SIZE):
-    """
-    Preprocess image for model prediction
-    """
+def detect_faces_simple(frame):
+    """Detect faces in frame using Haar Cascade"""
     try:
-        # Create a temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-            # Save uploaded file to temp
-            tmp_file.write(image_file.getvalue())
-            tmp_path = tmp_file.name
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Load and preprocess image
-        img = load_img(tmp_path, color_mode='rgb', target_size=(img_size, img_size))
-        img_array = img_to_array(img) / 255.0  # Normalize to [0, 1]
-        img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+        # Load face cascade classifier
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        )
         
-        # Clean up temp file
-        os.unlink(tmp_path)
+        # Detect faces
+        faces = face_cascade.detectMultiScale(
+            gray, 
+            scaleFactor=1.1, 
+            minNeighbors=4, 
+            minSize=(30, 30)
+        )
         
-        return img_array, img
+        return faces
+            
+    except Exception as e:
+        st.warning(f"Face detection issue: {str(e)}")
+        return []
+
+def predict_face_simple(model, face_img):
+    """Predict age and gender for a face"""
+    try:
+        # Resize and normalize
+        face_resized = cv2.resize(face_img, (IMG_SIZE, IMG_SIZE))
+        face_normalized = face_resized / 255.0
+        face_batch = np.expand_dims(face_normalized, axis=0)
+        
+        # Predict
+        predictions = model.predict(face_batch, verbose=0)
+        age_pred = float(predictions[0][0][0])
+        gender_pred_prob = float(predictions[1][0][0])
+        
+        # Interpret results
+        gender = "Female" if gender_pred_prob > 0.5 else "Male"
+        confidence = gender_pred_prob if gender_pred_prob > 0.5 else 1 - gender_pred_prob
+        
+        return age_pred, gender, confidence
         
     except Exception as e:
-        st.error(f"❌ Error processing image: {str(e)}")
-        return None, None
+        st.warning(f"Prediction error: {str(e)}")
+        return 0, "Unknown", 0.0
 
 def main():
     st.set_page_config(
@@ -64,223 +90,249 @@ def main():
         layout="wide"
     )
     
-    st.title("🎭 UTKFace Age and Gender Prediction")
+    # Custom CSS
     st.markdown("""
-    Upload a facial image to predict age and gender.
-    *Model trained on UTKFace dataset*
-    """)
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #1E88E5;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #666;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .stButton > button {
+        width: 100%;
+        margin-top: 10px;
+    }
+    .prediction-box {
+        background-color: #f0f2f6;
+        padding: 20px;
+        border-radius: 10px;
+        margin: 10px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
-    # Sidebar for model info
+    st.markdown('<h1 class="main-header">🎭 Real-time Age & Gender Predictor</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Upload an image or use your webcam for real-time predictions</p>', unsafe_allow_html=True)
+    
+    # Sidebar
     with st.sidebar:
-        st.header("⚙️ Model Information")
-        st.markdown("""
-        **Task**: Multi-task learning  
-        **Output 1**: Age (regression)  
-        **Output 2**: Gender (classification)  
-        **Architecture**: Custom CNN  
-        **Training Data**: UTKFace Dataset
-        """)
+        st.header("⚙️ Settings")
         
-        # Model loading option
-        st.subheader("📁 Model Configuration")
-        model_path = st.text_input("Path to model file:", "gender_age_model.h5")
+        # Model loading
+        model_path = st.text_input("Model file path:", "gender_age_model.h5")
         
         st.markdown("---")
-        st.subheader("ℹ️ About")
+        st.header("ℹ️ Instructions")
         st.markdown("""
-        This app uses a deep learning model trained on the 
-        [UTKFace dataset](https://susanqq.github.io/UTKFace/).
+        1. **Image Upload**: Upload a clear face photo
+        2. **Webcam Mode**: Click 'Start Webcam' for real-time
+        3. **For best results**:
+           - Face the camera directly
+           - Ensure good lighting
+           - Remove sunglasses/hats
         
-        **Gender labels**:  
-        • 0 = Male  
-        • 1 = Female
+        **Gender labels**: 0=Male, 1=Female
         """)
     
-    # Main content - split into two columns
-    col1, col2 = st.columns([1, 1])
+    # Main content - tabs for different modes
+    tab1, tab2 = st.tabs(["📤 Upload Image", "📷 Real-time Webcam"])
     
-    with col1:
-        st.subheader("📤 Upload Image")
-        uploaded_file = st.file_uploader(
-            "Choose an image file", 
-            type=["jpg", "jpeg", "png"],
-            help="Upload a clear facial image for best results",
-            label_visibility="collapsed"
-        )
+    with tab1:
+        # Original image upload functionality
+        st.subheader("Upload Image for Prediction")
         
-        if uploaded_file is not None:
-            # Display uploaded image
-            try:
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Choose an image file", 
+                type=["jpg", "jpeg", "png"],
+                key="file_uploader"
+            )
+            
+            if uploaded_file is not None:
                 image = Image.open(uploaded_file)
-                
-                # Resize for display
-                display_width = 400
-                width_percent = (display_width / float(image.size[0]))
-                display_height = int((float(image.size[1]) * float(width_percent)))
-                image_display = image.resize((display_width, display_height), Image.Resampling.LANCZOS)
-                
-                st.image(image_display, caption="Uploaded Image", width=400)
-                
-                # Add image info
-                st.caption(f"**Image details:** {image.size[0]} × {image.size[1]} pixels")
-                
-            except Exception as e:
-                st.error(f"❌ Error loading image: {str(e)}")
-    
-    with col2:
-        st.subheader("📊 Prediction Results")
+                st.image(image, caption="Uploaded Image", width=300)
         
-        if uploaded_file is not None and st.button("🔍 Predict Age & Gender", type="primary"):
-            with st.spinner("Processing image and making prediction..."):
-                # Load model
-                model = load_trained_model(model_path)
-                
-                if model:
-                    # Preprocess image
-                    processed_img, original_img = preprocess_image(uploaded_file)
-                    
-                    if processed_img is not None:
-                        try:
-                            # Make prediction
-                            predictions = model.predict(processed_img, verbose=0)
-                            age_pred = float(predictions[0][0][0])
-                            gender_pred_prob = float(predictions[1][0][0])
+        with col2:
+            if uploaded_file is not None:
+                if st.button("🔍 Predict from Upload", type="primary"):
+                    with st.spinner("Processing..."):
+                        model = load_trained_model(model_path)
+                        
+                        if model:
+                            # Save to temp file
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                                tmp_file.write(uploaded_file.getvalue())
+                                tmp_path = tmp_file.name
                             
-                            # Interpret predictions
-                            # UTKFace: 0 = Male, 1 = Female
-                            predicted_gender = "Female" if gender_pred_prob > 0.5 else "Male"
-                            gender_confidence = gender_pred_prob if gender_pred_prob > 0.5 else 1 - gender_pred_prob
-                            
-                            # Display results in a nice format
-                            st.success("✅ Prediction Complete!")
-                            
-                            # Create columns for metrics
-                            col_a, col_g = st.columns(2)
-                            
-                            with col_a:
-                                st.metric(
-                                    label="**Predicted Age**",
-                                    value=f"{age_pred:.1f}",
-                                    help="Age in years"
-                                )
+                            try:
+                                # Preprocess
+                                img = load_img(tmp_path, color_mode='rgb', target_size=(IMG_SIZE, IMG_SIZE))
+                                img_array = img_to_array(img) / 255.0
+                                img_array = np.expand_dims(img_array, axis=0)
                                 
-                            with col_g:
-                                st.metric(
-                                    label="**Predicted Gender**",
-                                    value=predicted_gender,
-                                    delta=f"{gender_confidence:.1%} confidence"
-                                )
-                            
-                            # Add detailed information in expander
-                            with st.expander("📋 View Detailed Results"):
-                                st.write(f"**Age prediction:** {age_pred:.1f} years")
-                                st.write(f"**Gender prediction:** {predicted_gender}")
-                                st.write(f"**Gender confidence:** {gender_confidence:.2%}")
+                                # Predict
+                                predictions = model.predict(img_array, verbose=0)
+                                age_pred = float(predictions[0][0][0])
+                                gender_pred_prob = float(predictions[1][0][0])
                                 
-                                # Confidence bar
-                                st.write("**Gender confidence level:**")
+                                predicted_gender = "Female" if gender_pred_prob > 0.5 else "Male"
+                                gender_confidence = gender_pred_prob if gender_pred_prob > 0.5 else 1 - gender_pred_prob
+                                
+                                # Display results
+                                st.markdown('<div class="prediction-box">', unsafe_allow_html=True)
+                                col_a, col_g = st.columns(2)
+                                with col_a:
+                                    st.metric("Predicted Age", f"{age_pred:.1f} years")
+                                with col_g:
+                                    st.metric("Predicted Gender", predicted_gender, 
+                                             delta=f"{gender_confidence:.1%} conf")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                                
+                                # Show confidence
                                 st.progress(gender_confidence)
                                 
-                                # Age interpretation
-                                st.write("**Age category:**")
-                                if age_pred < 13:
-                                    st.info("👶 Child (0-12 years)")
-                                elif age_pred < 20:
-                                    st.info("👦 Teenager (13-19 years)")
-                                elif age_pred < 30:
-                                    st.info("🧑 Young Adult (20-29 years)")
-                                elif age_pred < 50:
-                                    st.info("👨 Middle-aged (30-49 years)")
-                                elif age_pred < 65:
-                                    st.info("👨‍🦳 Mature Adult (50-64 years)")
-                                else:
-                                    st.info("👴 Senior (65+ years)")
-                            
-                            # Visualization
-                            st.subheader("📈 Result Visualization")
-                            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                            
-                            # Original image
-                            ax1.imshow(original_img)
-                            ax1.set_title("Original Image")
-                            ax1.axis('off')
-                            
-                            # Prediction info
-                            ax2.axis('off')
-                            info_text = f"Prediction Results:\n\n"
-                            info_text += f"Age: {age_pred:.1f} years\n"
-                            info_text += f"Gender: {predicted_gender}\n"
-                            info_text += f"Confidence: {gender_confidence:.1%}"
-                            ax2.text(0.1, 0.5, info_text, fontsize=12, 
-                                    verticalalignment='center', 
-                                    transform=ax2.transAxes)
-                            ax2.set_title("Prediction Summary")
-                            
-                            st.pyplot(fig)
-                            plt.close()
-                            
-                            # Download results option
-                            st.subheader("💾 Download Results")
-                            result_text = f"""Age and Gender Prediction Results:
-                            
-Image: {uploaded_file.name}
-Predicted Age: {age_pred:.1f} years
-Predicted Gender: {predicted_gender}
-Gender Confidence: {gender_confidence:.2%}
-Age Category: {get_age_category(age_pred)}
-
-Generated by UTKFace Age & Gender Predictor
-"""
-                            
-                            st.download_button(
-                                label="📥 Download Results as Text",
-                                data=result_text,
-                                file_name="prediction_results.txt",
-                                mime="text/plain"
-                            )
-                            
-                        except Exception as e:
-                            st.error(f"❌ Prediction error: {str(e)}")
+                                # Clean up
+                                os.unlink(tmp_path)
+                                
+                            except Exception as e:
+                                st.error(f"Prediction error: {str(e)}")
     
-    # Add footer with instructions
-    st.markdown("---")
-    
-    # Tips in expandable section
-    with st.expander("💡 Tips for better predictions"):
-        st.markdown("""
-        **For optimal results:**
-        1. 📸 Use clear, front-facing facial images
-        2. 💡 Ensure good, even lighting
-        3. 🎭 Avoid hats, sunglasses, or face coverings
-        4. 😶 Use images with neutral expressions
-        5. 🖼️ Crop image to focus on face
+    with tab2:
+        st.subheader("Real-time Webcam Prediction")
         
-        **Limitations:**
-        - Model trained on specific dataset (UTKFace)
-        - May not perform optimally on images outside training distribution
-        - Age prediction has inherent uncertainty
-        """)
-    
-    # Add citation
-    st.caption("""
-    *Model trained on the [UTKFace dataset](https://susanqq.github.io/UTKFace/). 
-    This is a demonstration project for educational purposes.*
-    """)
-
-def get_age_category(age):
-    """Helper function to categorize age"""
-    if age < 13:
-        return "Child"
-    elif age < 20:
-        return "Teenager"
-    elif age < 30:
-        return "Young Adult"
-    elif age < 50:
-        return "Middle-aged"
-    elif age < 65:
-        return "Mature Adult"
-    else:
-        return "Senior"
+        # Load model
+        model = load_trained_model(model_path)
+        
+        if model is None:
+            st.error("❌ Could not load model. Please check model file.")
+            st.stop()
+        
+        # Controls
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("▶️ Start Webcam", type="primary", key="start_btn"):
+                st.session_state.webcam_active = True
+        with col2:
+            if st.button("⏹️ Stop Webcam", type="secondary", key="stop_btn"):
+                st.session_state.webcam_active = False
+        
+        # Webcam feed
+        if st.session_state.webcam_active:
+            st.success("✅ Webcam active - Detecting faces...")
+            
+            # Initialize webcam
+            cap = cv2.VideoCapture(0)
+            
+            if not cap.isOpened():
+                st.error("❌ Could not access webcam. Please check camera permissions.")
+                st.session_state.webcam_active = False
+            else:
+                # Create placeholders
+                frame_placeholder = st.empty()
+                current_prediction = st.empty()
+                
+                try:
+                    while st.session_state.webcam_active and cap.isOpened():
+                        ret, frame = cap.read()
+                        if not ret:
+                            st.warning("⚠️ Cannot read from webcam")
+                            break
+                        
+                        # Convert for display
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        
+                        # Detect faces
+                        faces = detect_faces_simple(frame)
+                        
+                        # Process each face
+                        for (x, y, w, h) in faces:
+                            # Draw rectangle
+                            cv2.rectangle(frame_rgb, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                            
+                            # Predict for this face
+                            face_roi = frame[y:y+h, x:x+w]
+                            if face_roi.size > 0:
+                                age, gender, confidence = predict_face_simple(model, face_roi)
+                                
+                                # Add label
+                                label = f"{gender} {age:.1f}y"
+                                if confidence > 0.5:
+                                    label += f" ({confidence:.0%})"
+                                
+                                # Draw text with background
+                                font = cv2.FONT_HERSHEY_SIMPLEX
+                                text_size = cv2.getTextSize(label, font, 0.7, 2)[0]
+                                
+                                # Draw background rectangle for text
+                                cv2.rectangle(frame_rgb, 
+                                            (x, y - text_size[1] - 10), 
+                                            (x + text_size[0], y), 
+                                            (0, 255, 0), 
+                                            -1)
+                                
+                                # Draw text
+                                cv2.putText(frame_rgb, label, (x, y - 5), 
+                                          font, 0.7, (0, 0, 0), 2)
+                                
+                                # Show current prediction
+                                with current_prediction.container():
+                                    st.markdown('<div class="prediction-box">', unsafe_allow_html=True)
+                                    col_a, col_g = st.columns(2)
+                                    with col_a:
+                                        st.metric("Current Age", f"{age:.1f} years")
+                                    with col_g:
+                                        st.metric("Current Gender", gender, 
+                                                 delta=f"{confidence:.1%} conf")
+                                    st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Display frame
+                        frame_placeholder.image(frame_rgb, channels="RGB", width=640)
+                        
+                        # If no faces detected
+                        if len(faces) == 0:
+                            with current_prediction.container():
+                                st.info("👤 No faces detected. Please position your face in front of the camera.")
+                        
+                        # Control frame rate
+                        time.sleep(0.03)
+                        
+                except Exception as e:
+                    st.error(f"❌ Webcam error: {str(e)}")
+                
+                # Clean up
+                cap.release()
+                cv2.destroyAllWindows()
+        
+        else:
+            # Instructions when webcam is off
+            st.info("""
+            ### 👆 Ready to Start?
+            
+            **Click 'Start Webcam' to begin real-time face detection**
+            
+            **How it works:**
+            1. Click ▶️ **Start Webcam** button
+            2. Allow camera access in your browser
+            3. Position your face in the camera view
+            4. The system will automatically detect your face
+            5. Age and gender predictions will appear on screen
+            6. Click ⏹️ **Stop Webcam** when finished
+            
+            **Tips for best results:**
+            - 🎯 Face the camera directly
+            - 💡 Ensure good lighting
+            - 👓 Remove sunglasses/hats
+            - 📏 Stay close enough for clear view
+            """)
 
 if __name__ == "__main__":
     main()
